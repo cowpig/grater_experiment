@@ -30,3 +30,7 @@ const users = (state = {}, action) => {
 			return state.delete(action.id)
 		case "TOGGLE_MUTE":
 			return state.set(action.id, !state.muted)
+		default:
+			return state
+	}
+}

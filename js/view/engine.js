@@ -1,5 +1,4 @@
 
-
 const draw = (views) => {
 	// apply the redux composed function
 
