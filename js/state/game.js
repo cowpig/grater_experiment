@@ -1,5 +1,6 @@
 import {Map} from 'immutable'
 import {combineReducers} from 'redux'
+import m from 'mithril'
 
 // Global State
 window.state = {
@@ -23,6 +24,7 @@ window.state = {
 	ball: new Map({
 		x: 0,
 		y: 200,
+		flipped: true
 	}),
 }
 // animation transforms that should be merged with the state on every draw tick
@@ -57,20 +59,23 @@ window.animations = {
 // 	}
 // }
 
+
 const ball = (state = new Map(), action) => {
 	switch (action.type) {
 		case 'MOVE':
 			// instantaneously update the ball position to mouse's position on click
-			return new Map({
+			return state.merge(new Map({
 				x: window.mouseX - 50,
 				y: window.mouseY - 50,
-			})
+			}))
 
 		case 'BOUNCE':
-			return new Map({
+			return state.merge(new Map({
 				x: window.innerWidth * 0.5 - 50,
 				y: window.innerHeight - 100,
-			})
+			}))
+		case 'FLIP':
+			return state.set('flipped', !state.get('flipped'))
 	}
 	return state
 }
@@ -137,20 +142,45 @@ const computeAnimations = (state, animations, timestamp) => {
 
 const drawing_runloop = (timestamp) => {
 	window.timestamp = timestamp
-    const current_tick = computeAnimations(window.state, window.animations, timestamp)
-	render(current_tick)
+    const current_state = computeAnimations(window.state, window.animations, timestamp)
+	m.render(document.body, view(current_state))
 	window.requestAnimationFrame(drawing_runloop)
 }
 
 const getDOM = (id) => document.getElementById(id)
 
-// Take a state tree and render it to the DOM
-const render = (state) => {
-	getDOM('test').innerHTML = JSON.stringify(state, null, ' ')
-
-	getDOM('ball').style.left = state.ball.x
-	getDOM('ball').style.top = state.ball.y
+const view = (state) => {
+	return view_funcs.wrapper(state, [
+		view_funcs.ball(state)
+	]);
 }
+
+// view functions
+const view_funcs = {
+	wrapper: (state, children) => {
+		return m('div', {id:'wrapper'}, children)
+	},
+	ball: (state, children) => {
+		const me = state.ball
+		const attrs = {
+			id: 'ball',
+			onclick: onClickBall,
+			style: {
+				top: me.flipped ? me.x : me.y ,
+				left: me.flipped ? me.y : me.x,
+			}
+		}
+		return m('div', attrs, children)
+	},
+}
+
+// Take a state tree and render it to the DOM
+// const render = (state) => {
+// 	getDOM('test').innerHTML = JSON.stringify(state, null, ' ')
+
+// 	getDOM('ball').style.left = state.ball.x
+// 	getDOM('ball').style.top = state.ball.y
+// }
 
 
 // Event Listeners
@@ -164,15 +194,18 @@ const onClickBall = (event) => {
 	console.log('clicked ball!', event)
 	// dispatch({type: 'BOUNCE'})
 	dispatch({type: 'MOVE'})
-	dispatch({type: 'FOLLOW_MOUSE'})
+	// dispatch({type: 'FOLLOW_MOUSE'})
+	dispatch({type: 'FLIP'})
 }
 
 const onLoad = () => {
-	getDOM('test').addEventListener('click', onClickText)
-	getDOM('ball').addEventListener('click', onClickBall)
+	// getDOM('test').addEventListener('click', onClickText)
+	// getDOM('ball').addEventListener('click', onClickBall)
+	dispatch({type: 'FOLLOW_MOUSE'})
 	drawing_runloop()
 }
 window.addEventListener('load', onLoad)
+
 document.onmousemove = (event) => {
     window.mouseX = event.pageX
     window.mouseY = event.pageY
