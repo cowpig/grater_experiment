@@ -140,14 +140,18 @@ const computeAnimations = (state, animations, timestamp) => {
 	return (new Map(state)).mergeDeep(next_step).toJS()
 }
 
+const getDOM = (id) => document.getElementById(id)
+
+const mount_point = getDOM('mount_point')
+
 const drawing_runloop = (timestamp) => {
 	window.timestamp = timestamp
     const current_state = computeAnimations(window.state, window.animations, timestamp)
-	m.render(document.body, view(current_state))
+	m.render(mount_point, view(current_state))
 	window.requestAnimationFrame(drawing_runloop)
 }
 
-const getDOM = (id) => document.getElementById(id)
+
 
 const view = (state) => {
 	return view_funcs.wrapper(state, [
@@ -158,7 +162,7 @@ const view = (state) => {
 // view functions
 const view_funcs = {
 	wrapper: (state, children) => {
-		return m('div', {id:'wrapper'}, children)
+		return m('div', {id: 'wrapper'}, children)
 	},
 	ball: (state, children) => {
 		const me = state.ball
