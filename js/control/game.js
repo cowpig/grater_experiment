@@ -21,4 +21,3 @@ const deal_cards = (cards) => {
 	store.dispatch("DEAL_TO_BOARD", cards)
 	if game.
 }
-

@@ -11,4 +11,4 @@ class Player(object):
 
 class Game(object):
 	def __init__(self, players):
-		pass
+		pass 

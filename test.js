@@ -11,129 +11,220 @@ var _mithril2 = _interopRequireDefault(_mithril);
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { default: obj }; }
 
-// Global State
+///////////
+// STATE //
+
 window.state = {
-	// players: new Map({
-	// 	1: {
-	// 		id: 1,
-	// 		avatar: 'cowpig',
-	// 		stack: 1000000,
-	// 		name: 'cowpig',
-	// 	},
-	// }),
-	// board: new Map({
-	// 	type: 'holdem',
-	// 	cards: [],
-	// 	pot: 0,
-	// 	actionAt: 0,
-	// 	holecards: {
-	// 		1: ['Ts', 'Js'],
-	// 	},
-	// }),
-	ball: new _immutable.Map({
-		x: 0,
-		y: 200,
-		flipped: true
-	})
+	players: {
+		1: {
+			id: 1,
+			avatar: 'cowpig',
+			stack: 10866,
+			name: 'cowpig'
+		},
+		10: {
+			id: 10,
+			avatar: 'clown',
+			stack: 100,
+			name: 'AJFenix'
+		},
+		11: {
+			id: 11,
+			avatar: 'ninja',
+			stack: 120,
+			name: 'MagicNinja'
+		}
+	},
+	board: {
+		type: 'holdem',
+		top: "10%",
+		left: 0,
+		height: window.innerWidth * 0.5,
+		width: window.innerWidth,
+		sitting: [1, null, 10, null, null, null, null, 11],
+		button_idx: 0,
+		pot: 0,
+		actionAt: 0,
+		cards: {
+			community: [],
+			1: ['Ts', 'Js'],
+			10: ['X', 'X'],
+			11: ['X', 'X']
+		},
+		cards_dealing: {}
+	}
 };
+
+window.animations = {};
+
+//////////////
+// DISPATCH //
+
 // animation transforms that should be merged with the state on every draw tick
-window.animations = {}
-// ball: {
-// 	start_time: new Date(),
-// 	step: (state, delta) => ({x: window.mouseX, y: window.mouseY}),
-// },
-
-
-// Reducers
-// const players = (state = new Map(), action) => {
+// window.animations = {
 // 	switch (action.type) {
-// 		case 'ADD_PLAYER':
-// 			const p = action.player;
-// 			return state.set(p.id, p)
-// 		case 'REMOVE_PLAYER':
-// 			return state.delete(action.id)
-// 		case 'SET_STACK':
-// 			return state.set(action.id, action.stack)
+// 		// case 'DEAL_CARDS':
+// 		// 	for (target of state.action.cards_dealing) {
+
+// 		// 	}
 // 		default:
 // 			return state
 // 	}
 // }
 
-// const board = (state = new Map(), action) => {
-// 	switch (action.type) {
-// 		case 'DEAL_TO_BOARD':
-// 			return state.cards.concat(action.cards)
-// 		default:
-// 			return state
-// 	}
-// }
-
-;var ball = function ball() {
+var players = function players() {
 	var state = arguments.length <= 0 || arguments[0] === undefined ? new _immutable.Map() : arguments[0];
 	var action = arguments[1];
 
 	switch (action.type) {
-		case 'MOVE':
-			// instantaneously update the ball position to mouse's position on click
-			return state.merge(new _immutable.Map({
-				x: window.mouseX - 50,
-				y: window.mouseY - 50
-			}));
-
-		case 'BOUNCE':
-			return state.merge(new _immutable.Map({
-				x: window.innerWidth * 0.5 - 50,
-				y: window.innerHeight - 100
-			}));
-		case 'FLIP':
-			return state.set('flipped', !state.get('flipped'));
+		case 'ADD_PLAYER':
+			var p = action.player;
+			return state.set(p.id, p);
+		case 'REMOVE_PLAYER':
+			return state.delete(action.id);
+		case 'SET_STACK':
+			return state.set(action.id, action.stack);
+		default:
+			return state;
 	}
-	return state;
 };
 
-function elastic(progress, x) {
-	var result = Math.pow(2, 10 * (progress - 1)) * Math.cos(20 * Math.PI * x / 3 * progress);
-	return result % 88;
-}
-
-var ballAnimations = function ballAnimations() {
-	var animation = arguments.length <= 0 || arguments[0] === undefined ? new _immutable.Map() : arguments[0];
+var board = function board() {
+	var state = arguments.length <= 0 || arguments[0] === undefined ? new _immutable.Map() : arguments[0];
 	var action = arguments[1];
 
 	switch (action.type) {
-		case 'FOLLOW_MOUSE':
-			return animation.start_time ? {} : {
-				start_time: window.timestamp,
-				step: function step(state, delta) {
-					return {
-						x: window.mouseX - 50,
-						y: window.mouseY - 50
-					};
-				}
-			};
-		case 'BOUNCE':
-			return {
-				start_time: window.timestamp,
-				step: function step(state, delta) {
-					return {
-						x: elastic(delta / 1000, window.state.ball.x || 0),
-						y: delta / 100 + window.state.ball.y || 0
-					};
-				}
-			};
+		case 'DEAL_CARDS':
+			return state.cards.concat(action.cards);
+		default:
+			return state;
 	}
-	return animation;
 };
 
+///////////
+// VIEWS //
+
+var view = function view(state) {
+	return view_funcs.wrapper(state, [view_funcs.table(state)]);
+};
+
+// view functions
+var view_funcs = {
+	wrapper: function wrapper(state, children) {
+		return (0, _mithril2.default)('div', { id: 'wrapper' }, children);
+	},
+	table: function table(state, children) {
+		var SEATBOX_SIZE_RATIO = 0.135;
+
+		var table = {
+			class: 'table',
+			style: {
+				top: state.board.top,
+				left: state.board.left,
+				height: state.board.height,
+				width: state.board.width,
+				position: 'absolute'
+			}
+		};
+		var felt = { class: 'felt' };
+		var positions = player_positions(state);
+
+		var seatbox_width = state.board.width * SEATBOX_SIZE_RATIO;
+		var seatbox_height = seatbox_width * 2 / 3;
+		var section_height = seatbox_height / 4;
+
+		var seatboxes = [];
+
+		positions.map(function (pt, i) {
+			var seatbox = {
+				class: "seatbox",
+				style: {
+					height: seatbox_height,
+					width: seatbox_width,
+					top: pt.y - 0.5 * seatbox_height,
+					left: pt.x - 0.5 * seatbox_width
+				}
+			};
+			var pid = state.board.sitting[i];
+			var plyr = state.players[pid];
+
+			var fontsize = section_height / 2;
+			var seat = {
+				class: 'seat' + (plyr ? '' : ' hoveropacity'),
+				style: {
+					top: section_height * 2,
+					left: 0,
+					height: section_height * 2,
+					width: seatbox_width,
+					'font-size': fontsize
+				}
+			};
+			var label = null;
+			if (plyr) {
+				label = [(0, _mithril2.default)('div', { class: 'white opaque' }, plyr.name), (0, _mithril2.default)('div', { class: 'white opaque' }, plyr.stack)];
+			} else {
+				label = [(0, _mithril2.default)('div', {
+					class: 'white opaque',
+					style: {
+						'position': 'relative',
+						'font-size': fontsize * 1.5,
+						top: (section_height * 2 - fontsize * 1.5) / 2.2
+					}
+				}, 'SIT HERE')];
+			}
+
+			// TODO: div that holds cards held by players
+			var cardbox = {};
+			var cards = null;
+
+			seatboxes.push((0, _mithril2.default)('div', seatbox, [(0, _mithril2.default)('div', seat, label), (0, _mithril2.default)('div', cardbox, cards)]));
+		});
+		seatboxes.push((0, _mithril2.default)('div', felt));
+		if (children) seatboxes += children;
+		return (0, _mithril2.default)('div', table, seatboxes);
+	}
+};
+// view helper functions
+var player_positions = function player_positions(state) {
+	var n_players = state.board.sitting.length;
+	var angle = 2 * Math.PI / n_players;
+	var center = {
+		x: state.board.width / 2,
+		y: state.board.height / 2
+	};
+	return state.board.sitting.map(function (item, i) {
+		var theta = void 0;
+		if (n_players % 2) {
+			theta = angle * (i + 0.5);
+		} else {
+			theta = angle * i;
+		}
+		theta = angle * i + Math.PI / 2; // player 1 at bottom
+		return add_pts(scale_pt(ellipse(center.y, center.x, theta), 0.82), center);
+	});
+};
+
+var ellipse = function ellipse(height, width, angle) {
+	return { x: width * Math.cos(angle),
+		y: height * Math.sin(angle) };
+};
+var add_pts = function add_pts(pt1, pt2) {
+	return { x: pt1.x + pt2.x, y: pt1.y + pt2.y };
+};
+var scale_pt = function scale_pt(pt, scalar) {
+	return { x: pt.x * scalar, y: pt.y * scalar };
+};
+
+/////////////
+// GENERIC //
+
 var stateReducers = (0, _redux.combineReducers)({
-	// players,
-	// board,
-	ball: ball
+	players: players,
+	board: board
 });
 var animationReducers = (0, _redux.combineReducers)({
 	// players: playerAnimations,
 	// board: boardAnimations,
-	ball: ballAnimations
 });
 
 // Actions are atomic and synchronous
@@ -159,79 +250,112 @@ var computeAnimations = function computeAnimations(state, animations, timestamp)
 	return new _immutable.Map(state).mergeDeep(next_step).toJS();
 };
 
-var getDOM = function getDOM(id) {
-	return document.getElementById(id);
-};
-
-var mount_point = getDOM('mount_point');
-
-var drawing_runloop = function drawing_runloop(timestamp) {
+var draw_loop = function draw_loop(timestamp) {
 	window.timestamp = timestamp;
 	var current_state = computeAnimations(window.state, window.animations, timestamp);
 	_mithril2.default.render(mount_point, view(current_state));
-	window.requestAnimationFrame(drawing_runloop);
-};
-
-var view = function view(state) {
-	return view_funcs.wrapper(state, [view_funcs.ball(state)]);
-};
-
-// view functions
-var view_funcs = {
-	wrapper: function wrapper(state, children) {
-		return (0, _mithril2.default)('div', { id: 'wrapper' }, children);
-	},
-	ball: function ball(state, children) {
-		var me = state.ball;
-		var attrs = {
-			id: 'ball',
-			onclick: onClickBall,
-			style: {
-				top: me.flipped ? me.x : me.y,
-				left: me.flipped ? me.y : me.x
-			}
-		};
-		return (0, _mithril2.default)('div', attrs, children);
-	}
-};
-
-// Take a state tree and render it to the DOM
-// const render = (state) => {
-// 	getDOM('test').innerHTML = JSON.stringify(state, null, ' ')
-
-// 	getDOM('ball').style.left = state.ball.x
-// 	getDOM('ball').style.top = state.ball.y
-// }
-
-// Event Listeners
-var onClickText = function onClickText(event) {
-	console.log('clicked text!', event);
-	// thrash test
-	// for (let i=0; i<100000; i++)
-	// dispatch({type:'SET_HASH', hash: new Date()})
-};
-var onClickBall = function onClickBall(event) {
-	console.log('clicked ball!', event);
-	// dispatch({type: 'BOUNCE'})
-	dispatch({ type: 'MOVE' });
-	// dispatch({type: 'FOLLOW_MOUSE'})
-	dispatch({ type: 'FLIP' });
+	window.requestAnimationFrame(draw_loop);
 };
 
 var onLoad = function onLoad() {
-	// getDOM('test').addEventListener('click', onClickText)
-	// getDOM('ball').addEventListener('click', onClickBall)
-	dispatch({ type: 'FOLLOW_MOUSE' });
-	drawing_runloop();
+	draw_loop();
 };
 window.addEventListener('load', onLoad);
 
-document.onmousemove = function (event) {
-	window.mouseX = event.pageX;
-	window.mouseY = event.pageY;
+},{"immutable":3,"mithril":4,"redux":10}],2:[function(require,module,exports){
+// shim for using process in browser
+
+var process = module.exports = {};
+var queue = [];
+var draining = false;
+var currentQueue;
+var queueIndex = -1;
+
+function cleanUpNextTick() {
+    draining = false;
+    if (currentQueue.length) {
+        queue = currentQueue.concat(queue);
+    } else {
+        queueIndex = -1;
+    }
+    if (queue.length) {
+        drainQueue();
+    }
+}
+
+function drainQueue() {
+    if (draining) {
+        return;
+    }
+    var timeout = setTimeout(cleanUpNextTick);
+    draining = true;
+
+    var len = queue.length;
+    while(len) {
+        currentQueue = queue;
+        queue = [];
+        while (++queueIndex < len) {
+            if (currentQueue) {
+                currentQueue[queueIndex].run();
+            }
+        }
+        queueIndex = -1;
+        len = queue.length;
+    }
+    currentQueue = null;
+    draining = false;
+    clearTimeout(timeout);
+}
+
+process.nextTick = function (fun) {
+    var args = new Array(arguments.length - 1);
+    if (arguments.length > 1) {
+        for (var i = 1; i < arguments.length; i++) {
+            args[i - 1] = arguments[i];
+        }
+    }
+    queue.push(new Item(fun, args));
+    if (queue.length === 1 && !draining) {
+        setTimeout(drainQueue, 0);
+    }
 };
 
-},{"immutable":2,"mithril":3,"redux":10}],2:[function(require,module,exports){
+// v8 likes predictible objects
+function Item(fun, array) {
+    this.fun = fun;
+    this.array = array;
+}
+Item.prototype.run = function () {
+    this.fun.apply(null, this.array);
+};
+process.title = 'browser';
+process.browser = true;
+process.env = {};
+process.argv = [];
+process.version = ''; // empty string to avoid regexp issues
+process.versions = {};
+
+function noop() {}
+
+process.on = noop;
+process.addListener = noop;
+process.once = noop;
+process.off = noop;
+process.removeListener = noop;
+process.removeAllListeners = noop;
+process.emit = noop;
+
+process.binding = function (name) {
+    throw new Error('process.binding is not supported');
+};
+
+process.cwd = function () { return '/' };
+process.chdir = function (dir) {
+    throw new Error('process.chdir is not supported');
+};
+process.umask = function() { return 0; };
+
+},{}],3:[function(require,module,exports){
 /**
  *  Copyright (c) 2014-2015, Facebook, Inc.
  *  All rights reserved.
@@ -5214,7 +5338,7 @@ document.onmousemove = function (event) {
   return Immutable;
 
 }));
-},{}],3:[function(require,module,exports){
+},{}],4:[function(require,module,exports){
 ;(function (global, factory) { // eslint-disable-line
 	"use strict"
 	/* eslint-disable no-undef */
@@ -7357,99 +7481,6 @@ document.onmousemove = function (event) {
 	return m
 })
 
-},{}],4:[function(require,module,exports){
-// shim for using process in browser
-
-var process = module.exports = {};
-var queue = [];
-var draining = false;
-var currentQueue;
-var queueIndex = -1;
-
-function cleanUpNextTick() {
-    draining = false;
-    if (currentQueue.length) {
-        queue = currentQueue.concat(queue);
-    } else {
-        queueIndex = -1;
-    }
-    if (queue.length) {
-        drainQueue();
-    }
-}
-
-function drainQueue() {
-    if (draining) {
-        return;
-    }
-    var timeout = setTimeout(cleanUpNextTick);
-    draining = true;
-
-    var len = queue.length;
-    while(len) {
-        currentQueue = queue;
-        queue = [];
-        while (++queueIndex < len) {
-            if (currentQueue) {
-                currentQueue[queueIndex].run();
-            }
-        }
-        queueIndex = -1;
-        len = queue.length;
-    }
-    currentQueue = null;
-    draining = false;
-    clearTimeout(timeout);
-}
-
-process.nextTick = function (fun) {
-    var args = new Array(arguments.length - 1);
-    if (arguments.length > 1) {
-        for (var i = 1; i < arguments.length; i++) {
-            args[i - 1] = arguments[i];
-        }
-    }
-    queue.push(new Item(fun, args));
-    if (queue.length === 1 && !draining) {
-        setTimeout(drainQueue, 0);
-    }
-};
-
-// v8 likes predictible objects
-function Item(fun, array) {
-    this.fun = fun;
-    this.array = array;
-}
-Item.prototype.run = function () {
-    this.fun.apply(null, this.array);
-};
-process.title = 'browser';
-process.browser = true;
-process.env = {};
-process.argv = [];
-process.version = ''; // empty string to avoid regexp issues
-process.versions = {};
-
-function noop() {}
-
-process.on = noop;
-process.addListener = noop;
-process.once = noop;
-process.off = noop;
-process.removeListener = noop;
-process.removeAllListeners = noop;
-process.emit = noop;
-
-process.binding = function (name) {
-    throw new Error('process.binding is not supported');
-};
-
-process.cwd = function () { return '/' };
-process.chdir = function (dir) {
-    throw new Error('process.chdir is not supported');
-};
-process.umask = function() { return 0; };
-
 },{}],5:[function(require,module,exports){
 'use strict';
 
@@ -7690,7 +7721,7 @@ function combineReducers(reducers) {
   };
 }
 }).call(this,require('_process'))
-},{"./createStore":9,"./utils/warning":11,"_process":4,"lodash/isPlainObject":15}],8:[function(require,module,exports){
+},{"./createStore":9,"./utils/warning":11,"_process":2,"lodash/isPlainObject":14}],8:[function(require,module,exports){
 "use strict";
 
 exports.__esModule = true;
@@ -7937,7 +7968,7 @@ function createStore(reducer, initialState, enhancer) {
     replaceReducer: replaceReducer
   };
 }
-},{"lodash/isPlainObject":15}],10:[function(require,module,exports){
+},{"lodash/isPlainObject":14}],10:[function(require,module,exports){
 (function (process){
 'use strict';
 
@@ -7986,7 +8017,7 @@ exports.bindActionCreators = _bindActionCreators2["default"];
 exports.applyMiddleware = _applyMiddleware2["default"];
 exports.compose = _compose2["default"];
 }).call(this,require('_process'))
-},{"./applyMiddleware":5,"./bindActionCreators":6,"./combineReducers":7,"./compose":8,"./createStore":9,"./utils/warning":11,"_process":4}],11:[function(require,module,exports){
+},{"./applyMiddleware":5,"./bindActionCreators":6,"./combineReducers":7,"./compose":8,"./createStore":9,"./utils/warning":11,"_process":2}],11:[function(require,module,exports){
 'use strict';
 
 exports.__esModule = true;
@@ -8012,23 +8043,6 @@ function warning(message) {
   /* eslint-enable no-empty */
 }
 },{}],12:[function(require,module,exports){
-/* Built-in method references for those with the same name as other `lodash` methods. */
-var nativeGetPrototype = Object.getPrototypeOf;
-
-/**
- * Gets the `[[Prototype]]` of `value`.
- *
- * @private
- * @param {*} value The value to query.
- * @returns {null|Object} Returns the `[[Prototype]]`.
- */
-function getPrototype(value) {
-  return nativeGetPrototype(Object(value));
-}
-
-module.exports = getPrototype;
-
-},{}],13:[function(require,module,exports){
 /**
  * Checks if `value` is a host object in IE < 9.
  *
@@ -8050,14 +8064,13 @@ function isHostObject(value) {
 
 module.exports = isHostObject;
 
-},{}],14:[function(require,module,exports){
+},{}],13:[function(require,module,exports){
 /**
  * Checks if `value` is object-like. A value is object-like if it's not `null`
  * and has a `typeof` result of "object".
  *
  * @static
  * @memberOf _
- * @since 4.0.0
  * @category Lang
  * @param {*} value The value to check.
  * @returns {boolean} Returns `true` if `value` is object-like, else `false`.
@@ -8081,9 +8094,8 @@ function isObjectLike(value) {
 
 module.exports = isObjectLike;
 
-},{}],15:[function(require,module,exports){
-var getPrototype = require('./_getPrototype'),
-    isHostObject = require('./_isHostObject'),
+},{}],14:[function(require,module,exports){
+var isHostObject = require('./_isHostObject'),
     isObjectLike = require('./isObjectLike');
 
 /** `Object#toString` result references. */
@@ -8095,18 +8107,17 @@ var objectProto = Object.prototype;
 /** Used to resolve the decompiled source of functions. */
 var funcToString = Function.prototype.toString;
 
-/** Used to check objects for own properties. */
-var hasOwnProperty = objectProto.hasOwnProperty;
-
 /** Used to infer the `Object` constructor. */
 var objectCtorString = funcToString.call(Object);
 
 /**
- * Used to resolve the
- * [`toStringTag`](http://ecma-international.org/ecma-262/6.0/#sec-object.prototype.tostring)
+ * Used to resolve the [`toStringTag`](http://ecma-international.org/ecma-262/6.0/#sec-object.prototype.tostring)
  * of values.
  */
 var objectToString = objectProto.toString;
+
+/** Built-in value references. */
+var getPrototypeOf = Object.getPrototypeOf;
 
 /**
  * Checks if `value` is a plain object, that is, an object created by the
@@ -8114,11 +8125,9 @@ var objectToString = objectProto.toString;
  *
  * @static
  * @memberOf _
- * @since 0.8.0
  * @category Lang
  * @param {*} value The value to check.
- * @returns {boolean} Returns `true` if `value` is a plain object,
- *  else `false`.
+ * @returns {boolean} Returns `true` if `value` is a plain object, else `false`.
  * @example
  *
  * function Foo() {
@@ -8142,15 +8151,15 @@ function isPlainObject(value) {
       objectToString.call(value) != objectTag || isHostObject(value)) {
     return false;
   }
-  var proto = getPrototype(value);
+  var proto = getPrototypeOf(value);
   if (proto === null) {
     return true;
   }
-  var Ctor = hasOwnProperty.call(proto, 'constructor') && proto.constructor;
+  var Ctor = proto.constructor;
   return (typeof Ctor == 'function' &&
     Ctor instanceof Ctor && funcToString.call(Ctor) == objectCtorString);
 }
 
 module.exports = isPlainObject;
 
-},{"./_getPrototype":12,"./_isHostObject":13,"./isObjectLike":14}]},{},[1]);
+},{"./_isHostObject":12,"./isObjectLike":13}]},{},[1]);

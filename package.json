@@ -12,7 +12,7 @@
     "mithril": "~0.2.3",
     "redux": "~3.3.1",
     "velocity": "~0.7.2",
-    "watchify": "^3.7.0"
+    "watchify": "~3.7.0"
   },
   "browserify": {
     "transform": [
