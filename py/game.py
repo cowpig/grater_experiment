@@ -1,173 +1,12 @@
-# relationships:
-#	player - hole cards
-#	player - chips
-# 	player - last action taken
-#	hand(game) - pot
-#	hand(game) - board cards
-#	hand(game) - players
-#	hand(game) - player to act
 import rankings
-import cards
 import copy
 from enum import Enum
+from collections import deque
 
-class Actions(Enum):
-	'NONE', 'POST', 'POST_DEAD', 'ANTE', \
-	'BET', 'RAISE', 'CALL', 'FOLD', 'BUY' = range(9)
+from utils import rotate_iter
+from cards import Card, Deck
+from game_models import Events, Table, Player, HandHistory
 
-# deals with keeping track of players & missing blinds
-class Table(object):
-	def __init__(self, id_, sb=1, bb=2, ante=0, max_players=6, players=None):
-		self.id = id_
-
-		self.sb = sb
-		self.bb = bb
-		self.ante = ante
-
-		self.players = [None] * max_players
-		if players:
-			for i, p in enumerate(players):
-				self.players[i] = p
-
-		self.games = []
-
-		self.btn_idx = None
-
-		# figure out how to deal with these situations
-		# http://www.learn-texas-holdem.com/questions/blind-rules-when-players-bust-out.htm
-		self.owes_bb = set()
-		self.owes_sb = set()
-
-	def sit(self, player, seat_number):
-		if self.players[seat_number]:
-			raise Exception("Seat already taken")
-		else:
-			self.players[seat_number] = player
-			self.post_bb.add(player.id)
-
-	def stand(self, player):
-		self.players[self.index(player)] = None
-
-	def forgive_debts(self, player):
-		if player in self.owes_bb:
-			owes_bb.remove(player)
-		if player in self.owes_sb:
-			owes_sb.remove(player)
-
-# A player has cards, stack and can take actions, which change states
-class Player(object):
-	def __init__(self, id_, name, stack=0, sitting_out=True, cards=None):
-		self.id = id_
-		self.name = name
-
-		if cards:
-			self.cards = cards
-		else:
-			self.cards = []
-
-		self.sitting_out = sitting_out
-		self.all_in = False
-		self.last_action = Actions.NONE
-
-		self.stack = stack
-		self.wagers = 0
-		self.last_wager_size = 0
-
-		self.pending_buyin = 0
-
-	def deal(self, card):
-		self.cards.append(card)
-
-	def can_bet(self, amt, last_amt=0):
-		if amt > self.stack:
-			return False
-		if amt < (last_amt*2) and amt != self.stack:
-			False
-		return True
-
-	def ante(self, amt):
-		if not can_bet(amt, last_amt):
-			return False
-
-		self.wagers += amt
-		self.stack -= amt
-		return (self.name, "ANTE", amt)
-
-	def bet(self, amt, last_amt=0):
-		if not can_bet(amt, last_amt):
-			return False
-			
-		if amt == self.stack:
-			self.all_in = True
-
-		self.last_action = Actions.BET
-		self.last_bet_size = amt - last_amt
-		self.wagers += amt
-		self.stack -= amt
-		if (last_amt == 0):
-			return (self.name, Actions.BET, amt)
-		else:
-			return (self.name, Actions.RAISE, (last_amt, amt))
-
-	def post(self, amt):
-		if not can_bet(amt, last_amt):
-			return False
-
-		self.wagers += amt
-		self.stack -= amt
-		self.last_action = Actions.POST
-		return (self.name, Actions.POST, amt)
-
-	def post(self, amt):
-		if not can_bet(amt, last_amt):
-			return False
-
-		self.wagers += amt
-		self.stack -= amt
-		self.last_action = Actions.POST_DEAD
-		return (self.name, Actions.POST_DEAD, amt)
-
-	def fold(self):
-		self.last_action = Actions.FOLD
-		return (self.name, Actions.FOLD, None)
-
-	def can_buy(self, amt, max_buyin):
-		return self.wagers + self.stack + amt <= max_buyin
-
-	def buy(self, amt):
-		self.stack_pending += amt
-		return (self.name, Actions.BUY, amt)
-
-	def __repr__(self):
-		return "{} ({})".format(self.name, self.stack)
-
-class Hand(object):
-	def __init__(self, table):
-		self.log = []
-		self.table = table
-
-	def log(self, to_log):
-		self.log.append(to_log)
-
-	def strlog(self):
-		output = []
-		def action_to_str(action):
-			player, action, amt = action
-			if action == Action.FOLD:
-				return "{} folds".format(player)
-			elif action in [Action.CALL, Action.BET, Action.POST, Action.ANTE]:
-
-		
-		for line in self.log:
-			if type(line) == tuple:
-				output.append(action_to_str(line))
-			else:
-				output.append(line)
-
-		return "\n".join(output)
-
-#####
-# game logic
 
 def log(s):
 	print s
@@ -209,22 +48,20 @@ def post_blinds(table, sb_idx, bb_idx):
 	for player in players:
 		if is_playing(player):
 			if player.id in table.owes_bb and player != players[bb_idx]:
-				player.post(table.bb)
+				events.append(player.post(table.bb))
 				table.owes_bb.remove(player.id)
 			if player.id in table.owes_sb:
-				player.ante(table.sb)
+				events.append(player.post_dead(table.sb))
 				table.owes_sb.remove(player.id)
 
-	players[bb_idx].post(table.bb)
+	events.append(players[bb_idx].post(table.bb))
 	if is_playing(players[sb_idx]):
-		players[sb_idx.post(table.sb)]
-		return (players, set())
+		events.append(players[sb_idx.post(table.sb)])
+		return (players, events, set())
 	else:
-		return (players, set(players[sb_idx].id))
+		return (players, events, set(players[sb_idx].id))
 
-
-
-def sit_out_inactives(table):
+def prep_new_hand(table):
 	players = copy.deepcopy(table.players)
 
 	# set in/out states
@@ -232,8 +69,48 @@ def sit_out_inactives(table):
 		if player.stack == 0 or (player.id in table.owes_bb and player.stack < BB):
 			player.sitting_out = True
 			log("{} needs more chips; sitting out".format(player.name))
+		player.last_bet_size = 0
+		player.last_action = Events.NONE
+
+	return table
+
+def deal_starting_hands(table, first):
+	players = copy.deepcopy(table.players)
+	events = []
+	for player in rotate_iter(players, first):
+		if is_playing(player):
+			events.append(player.deal())
+
+def ordered_active_players(table, first):
+	return deque([p for p in rotate_iter(table.players, first) if is_playing(p)])
+
+def get_player_action(table, player):
+	raise Exception("TODO")
+	return (player, action)
+
+def betting_round(table, first):
+	players = copy.deepcopy(table.players)
+	n = len(players)
+	last_raise = None
+	next_to_act = first
+
+	while next_to_act != last_raise:
+		player, action = get_player_action(table, players[next_to_act])
 		
-	return players
+		if action == Events.RAISE or action == Events.BET:
+			last_raise = next_to_act
+
+		next_to_act = (next_to_act + 1) % n
+		# close round on first to act if no bet/raises occur
+		last_raise = last_raise or first 
+
+	raise Exception("TODO")
+
+def showdown(table):
+	raise Exception("TODO")
+
+def update_buyins(table):
+	raise Exception("TODO")
 
 if __name__ == '__main__':
 	players = [
@@ -242,29 +119,70 @@ if __name__ == '__main__':
 		Player(11,'magicninja',200),
 	]
 	SB, BB = (1,2)
-	t = Table(0, SB, BB, players=players)
-
-	hand = []
+	t = Table("Hopper", SB, BB, players=players)
 
 	while True:
-		table.players = sit_out_inactives(table)
+		deck = Deck(shuffled=True)
+
+		# before hand starts
+		table.players = prep_new_hand(table.players)
+		# This isn't following the pattern of only changing state within
+		#	the current block of code. How do we feel about that?
+		table.new_hand()
 
 		actives = active_players(table.players)
 		if len(actives) < 2:
-			log("\nNot enough players to deal a new hand.")
+			table.log("\nNot enough players to deal a new hand.")
 		else:
-			log("===Starting hand {}===".format(hand_num))
+			table.log("===Starting hand {}===".format(hand_num))
 
+		# post blinds
 		sb_idx, bb_idx, bb_owers = determine_blinds(table, bb_idx)
-		
 		table.owes_bb.update(bb_owers)
 
-		table.players, sb_owers = post_blinds(table, sb_idx, bb_idx)
+		table.players, post_events, sb_owers = post_blinds(table, sb_idx, bb_idx)
 		table.owes_sb.update(sb_owers)
+		for post_event in post_events:
+			table.log(post_event)
 
+		# deal hole cards
+		first = (bb_idx+1) % len(table.players)
+		table.players, deal_events = deal_starting_hands(table, first)
+		for deal_event in deal_events:
+			table.log(post_event)
 
+		# preflop betting
+		table.players, player_events = betting_round(table, first)
+		for deal_event in deal_events:
+			table.log(post_event)
 
-		# update everyones' stacks
-		deck = cards.Deck()
-		board = []
-		log("Dealing hand {}")
+		if len(active_players) > 1:
+			# deal flop; flop betting
+			table.board = [deck.deal(), deck.deal(), deck.deal()]
+			table.log("===FLOP=== DEALT: {}".format(table.board))
+			table.players, player_events = betting_round(table, sb_idx)
+			for deal_event in deal_events:
+				table.log(post_event)
+
+		if len(active_players) > 1:
+			# deal flop; flop betting
+			turn = [deck.deal()]
+			table.board += turn
+			table.log("===TURN=== DEALT: {}".format(turn))
+			table.players, player_events = betting_round(table, sb_idx)
+			for deal_event in deal_events:
+				table.log(post_event)
+
+		if len(active_players) > 1:
+			# deal flop; flop betting
+			river = [deck.deal()]
+			table.board += river
+			table.log("===RIVER=== DEALT: {}".format(river))
+			table.players, player_events = betting_round(table, sb_idx)
+			for deal_event in deal_events:
+				table.log(post_event)
+
+		# showdown, stack updates:
+		table.players = showdown(table)
+		table.players = update_buyins(table)
+
