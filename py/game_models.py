@@ -1,11 +1,19 @@
+from enum import Enum
+from cards import Deck, Card
 
 class Events(Enum):
-	'NONE', 'DEAL', 'POST', 'POST_DEAD', 'ANTE', \
-	'BET', 'RAISE', 'CALL', 'FOLD', 'BUY' = range(10)
+	NONE, DEAL, POST, POST_DEAD, ANTE, BET, RAISE_TO, \
+	CALL, FOLD, BUY, OWE, SET_BB, SET_SB = range(13)
+
+	def __str__(self):
+		return self.name
+
+	def __repr__(self):
+		return self.name
 
 # deals with keeping track of players & missing blinds
 class Table(object):
-	def __init__(self, id_, sb=1, bb=2, ante=0, max_players=6, players=None):
+	def __init__(self, id_, name, sb=1, bb=2, ante=0, max_players=6, players=None):
 		self.id = id_
 		self.name = name
 
@@ -18,13 +26,14 @@ class Table(object):
 			for i, p in enumerate(players):
 				self.players[i] = p
 
-		self.btn_idx = None
-
 		# figure out how to deal with these situations
 		# http://www.learn-texas-holdem.com/questions/blind-rules-when-players-bust-out.htm
 		self.owes_bb = set()
 		self.owes_sb = set()
 
+		self.deck = Deck()
+		self.sb_idx = None
+		self.bb_idx = None
 		self.board = []
 		self.last_raise_size = bb
 
@@ -46,13 +55,52 @@ class Table(object):
 		if player in self.owes_sb:
 			owes_sb.remove(player)
 
-	def new_hand():
+	def new_hand(self):
 		self.games.append(HandHistory())
 		self.board = []
-		self.last_raise_size = bb
+		self.last_raise_size = self.bb
+
+	def is_player(self, x):
+		return x in [p.id for p in self.players if p]
+
+	def get_player(self, id):
+		for player in self.players:
+			if player.id == id:
+				return player
+		return None
+
+	def handle_event(self, subj, event, obj):
+		self.log((subj, event, obj))
+		if self.is_player(subj):
+			player = get_player(subj)
+			player.take_action(event)
+			if event in (Events.POST, Events.POST_DEAD):
+				if obj == self.sb and player.id in self.owes_sb:
+					self.owes_sb.remove(player.id)
+				elif obj == self.bb and player.id in self.owes_bb:
+					self.owes_bb.remove(player.id)
+		elif subj == self.id:
+			if event == Events.OWE:
+				if obj == self.bb:
+					self.owes_bb.add(subj)
+				elif obj == self.sb:
+					self.owes_sb.add(subj)
+				else:
+					raise Exception("Can't owe a non-blind amt")
+			elif event == Events.SET_BB:
+				self.bb_idx = obj
+			elif event == Events.SET_SB:
+				self.sb_idx = obj
+
+	def handle_events(self, events):
+		for event in events:
+			self.handle_event(*event)
+
 
 	def log(self, event):
+		print event
 		self.games[-1].log(event)
+
 
 # A player has cards, stack and can take actions, which change states
 class Player(object):
@@ -87,7 +135,7 @@ class Player(object):
 		return True
 
 	def ante(self, amt):
-		if not can_bet(amt, last_amt):
+		if not self.can_bet(amt, last_amt):
 			return False
 
 		self.wagers += amt
@@ -95,7 +143,7 @@ class Player(object):
 		return (self.name, "ANTE", amt)
 
 	def post_dead(self, amt):
-		if not can_bet(amt, last_amt):
+		if not self.can_bet(amt, last_amt):
 			return False
 
 		self.wagers += amt
@@ -103,7 +151,7 @@ class Player(object):
 		return (self.name, Events.POST_DEAD, amt)
 
 	def bet(self, amt):
-		if not can_bet(amt):
+		if not self.can_bet(amt):
 			return False
 			
 		if amt == self.stack:
@@ -115,8 +163,19 @@ class Player(object):
 		self.stack -= amt
 		return (self.name, Events.BET, amt)
 
+	def call(self, amt):
+		amt_adjusted = amt - self.uncollected_bets
+		if amt_adjusted >= self.stack:
+			self.all_in = True
+			amt_adjusted = self.stack
+
+		self.wagers += amt_adjusted
+		self.stack -= amt_adjusted
+
+		return (self.name, Events.CALL, amt_adjusted)
+
 	def raise_to(self, amt, last_raise_size=0):
-		if not can_bet(amt, last_raise_size):
+		if not self.can_bet(amt, last_raise_size):
 			return False
 				
 		if amt == self.stack:
@@ -135,7 +194,7 @@ class Player(object):
 		return (self.name, Events.RAISE, (last_amt, amt))
 
 	def post(self, amt):
-		if not can_bet(amt, last_amt):
+		if not self.can_bet(amt):
 			return False
 
 		self.wagers += amt
@@ -155,15 +214,27 @@ class Player(object):
 		self.stack_pending += amt
 		return (self.name, Events.BUY, amt)
 
+	def take_action(self, action, amt=None):
+		if action == Events.Bet:
+			self.bet(amt)
+		elif action == Events.RAISE_TO:
+			self.raise_to(amt)
+		elif action == Events.FOLD:
+			self.fold()
+		elif action == Events.CALL:
+			self.call(amt)
+		else:
+			raise Exception("Don't know how to handle event '{}' for {}".format(action, self.name))
+
 	def __repr__(self):
 		return "{} ({})".format(self.name, self.stack)
 
 class HandHistory(object):
 	def __init__(self):
-		self.log = []
+		self.log_ = []
 
 	def log(self, to_log):
-		self.log.append(to_log)
+		self.log_.append(to_log)
 
 	def strlog(self):
 		output = []
@@ -172,6 +243,7 @@ class HandHistory(object):
 			if action == Action.FOLD:
 				return "{} folds".format(player)
 			elif action in [Action.CALL, Action.BET, Action.POST, Action.ANTE]:
+				raise Exception("TODO")
 
 		
 		for line in self.log:
