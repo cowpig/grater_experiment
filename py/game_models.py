@@ -1,9 +1,11 @@
 from enum import Enum
 from cards import Deck, Card
+import json
 
 class Events(Enum):
 	NONE, DEAL, POST, POST_DEAD, ANTE, BET, RAISE_TO, \
-	CALL, FOLD, BUY, OWE, SET_BB, SET_SB = range(13)
+	CALL, CHECK, FOLD, BUY, SIT_IN, SIT_OUT, DEAL, ADD_CHIPS, \
+	OWE, SET_GAME_STATE, NEW_HAND = range(18)
 
 	def __str__(self):
 		return self.name
@@ -13,8 +15,8 @@ class Events(Enum):
 
 # deals with keeping track of players & missing blinds
 class Table(object):
-	def __init__(self, id_, name, sb=1, bb=2, ante=0, max_players=6, players=None):
-		self.id = id_
+	def __init__(self, name, sb=1, bb=2, ante=0, max_players=6, players=None):
+		self.id = name
 		self.name = name
 
 		self.sb = sb
@@ -26,39 +28,62 @@ class Table(object):
 			for i, p in enumerate(players):
 				self.players[i] = p
 
-		# figure out how to deal with these situations
 		# http://www.learn-texas-holdem.com/questions/blind-rules-when-players-bust-out.htm
 		self.owes_bb = set()
 		self.owes_sb = set()
 
+		# individual hand state
 		self.deck = Deck()
-		self.sb_idx = None
-		self.bb_idx = None
-		self.board = []
-		self.last_raise_size = bb
+		self.game_state = {
+			"sb_idx": None,
+			"bb_idx": None,
+			"last_raise_size": None,
+			"next_to_act": None,
+			"last_to_raise": None,
+			"board": []
+		}
 
-		self.games = []
+		self.games = [HandHistory()]
+
+	def current_pot(self):
+		return sum([player.wagers 
+			for player in self.players if player and not player.sitting_out])
+
+	def hand_in_progress(self):
+		# TODO: there might be an edge case where this becomes incorrect?
+		return len(self.deck.cards) < 52
+
+	def to_json(self, indent=None):
+		out = {
+			"id": self.id,
+			"sb" : self.sb,
+			"bb" : self.bb,
+			"ante" : self.ante,
+			"players" : {i : p.summary_for_json() if p else None 
+							for i, p in enumerate(self.players)}
+		}
+
+		if self.hand_in_progress():
+			game_state = self.game_state
+			game_state['pot'] = self.current_pot()
+			out['game_state'] = game_state
+
+		return json.dumps(out, indent=indent)
 
 	def sit(self, player, seat_number):
 		if self.players[seat_number]:
 			raise Exception("Seat already taken")
 		else:
 			self.players[seat_number] = player
-			self.post_bb.add(player.id)
+			self.owes_bb.add(player.id)
 
 	def stand(self, player):
 		self.players[self.index(player)] = None
 
-	def forgive_debts(self, player):
-		if player in self.owes_bb:
-			owes_bb.remove(player)
-		if player in self.owes_sb:
-			owes_sb.remove(player)
-
 	def new_hand(self):
+		self.log("===Starting hand {}===".format(len(self.games)))
 		self.games.append(HandHistory())
 		self.board = []
-		self.last_raise_size = self.bb
 
 	def is_player(self, x):
 		return x in [p.id for p in self.players if p]
@@ -69,16 +94,46 @@ class Table(object):
 				return player
 		return None
 
+	def get_next_to_act(self):
+		if self.game_state['next_to_act']:
+			return self.players[self.game_state['next_to_act']]
+		return None
+
 	def handle_event(self, subj, event, obj):
+		if isinstance(subj, Player):
+			raise Exception("Passed Player instance into handle_event. You probably meant to pass in the ID.")
+		elif isinstance(subj, Table):
+			raise Exception("Passed Table instance into handle_event. You probably meant to pass in the ID.")
+		
 		self.log((subj, event, obj))
 		if self.is_player(subj):
-			player = get_player(subj)
-			player.take_action(event)
-			if event in (Events.POST, Events.POST_DEAD):
+			player = self.get_player(subj)
+			if event == Events.NEW_HAND:
+				player.new_hand()
+			elif event in (Events.POST, Events.POST_DEAD):
 				if obj == self.sb and player.id in self.owes_sb:
 					self.owes_sb.remove(player.id)
 				elif obj == self.bb and player.id in self.owes_bb:
 					self.owes_bb.remove(player.id)
+				player.post(obj)
+			elif event == Events.BET:
+				player.bet(obj)
+			elif event == Events.RAISE_TO:
+				player.raise_to(obj)
+			elif event == Events.CALL:
+				player.call(obj)
+			elif event == Events.FOLD:
+				player.fold()
+			elif event == Events.CHECK:
+				pass
+			elif event == Events.DEAL:
+				player.deal([self.deck.deal() for _ in xrange(obj)])
+			elif event == Events.SIT_IN:
+				player.sit_out()
+			elif event == Events.SIT_OUT:
+				player.sit_in()
+			else:
+				raise Exception("Unknown event {} for {} with {}".format(event, subj, obj))
 		elif subj == self.id:
 			if event == Events.OWE:
 				if obj == self.bb:
@@ -87,25 +142,32 @@ class Table(object):
 					self.owes_sb.add(subj)
 				else:
 					raise Exception("Can't owe a non-blind amt")
-			elif event == Events.SET_BB:
-				self.bb_idx = obj
-			elif event == Events.SET_SB:
-				self.sb_idx = obj
+			elif event == Events.SET_GAME_STATE:
+				key, val = obj
+				if not key in self.game_state:
+					raise Exception("Unknown game state parameter")
+				self.game_state[key] = val
+			elif event == Events.DEAL:
+				self.game_state['board'].append([self.deck.deal() for _ in xrange(obj)])
+			elif event == Events.NEW_HAND:
+				self.new_hand()
+			else:
+				raise Exception("Unknown event {} for {} with {}".format(event, subj, obj))
 
 	def handle_events(self, events):
 		for event in events:
 			self.handle_event(*event)
-
 
 	def log(self, event):
 		print event
 		self.games[-1].log(event)
 
 
+
 # A player has cards, stack and can take actions, which change states
 class Player(object):
-	def __init__(self, id_, name, stack=0, sitting_out=True, cards=None):
-		self.id = id_
+	def __init__(self, name, stack=0, sitting_out=True, cards=None):
+		self.id = name
 		self.name = name
 
 		if cards:
@@ -118,10 +180,48 @@ class Player(object):
 		self.last_action = Events.NONE
 
 		self.stack = stack
+		# wagers represents the total chips put into the pot during a hand
 		self.wagers = 0
+		# uncollected_bets represents the total chips put into the pot for one street
 		self.uncollected_bets = 0
 
-		self.pending_buyin = 0
+	def summary_for_json(self):
+		out = {
+			'name' : self.name,
+			'stack' : self.stack
+		}
+		if self.sitting_out:
+			out['sitting_out'] = True
+		
+		if self.last_action:
+			out['last_action'] = self.last_action.__str__()
+
+		if self.wagers != 0:
+			out['wagers'] = self.wagers
+		if self.uncollected_bets != 0:
+			out['uncollected_bets'] = self.uncollected_bets
+		
+		return out
+
+	def to_json(self, indent=None):
+		return json.dumps(summary_for_json(), indent=indent)
+
+	def clear_state(self):
+		self.wagers = 0
+		self.uncollected_bets = 0
+		self.last_action = Events.NONE
+		self.all_in = False
+		self.cards = []
+
+	def sit_out(self):
+		if self.uncollected_bets != 0 and self.last_action != Events.FOLD:
+			raise Exception("Cannot sit out in the middle of a hand!")
+		self.sitting_out = True
+		self.last_action = Events.SIT_OUT
+
+	def sit_out(self):
+		self.sitting_out = False
+		self.last_action = Events.SIT_IN
 
 	def deal(self, cards):
 		self.cards.extend(cards)
@@ -181,16 +281,16 @@ class Player(object):
 		if amt == self.stack:
 			self.all_in = True
 
-		diff = amt - self.uncollected_bets
-
-		self.last_action = Events.BET
 		self.uncollected_bets = amt
-		self.wagers += amt
-		self.stack -= amt
+
+		diff = amt - self.uncollected_bets
+		self.wagers += diff
+		self.stack -= diff
 
 		if amt == self.stack:
 			self.all_in = True
 
+		self.last_action = Events.RAISE_TO
 		return (self.name, Events.RAISE, (last_amt, amt))
 
 	def post(self, amt):
@@ -201,6 +301,7 @@ class Player(object):
 		self.stack -= amt
 		self.uncollected_bets = amt
 		self.last_action = Events.POST
+		
 		return (self.name, Events.POST, amt)
 
 	def fold(self):
@@ -226,8 +327,11 @@ class Player(object):
 		else:
 			raise Exception("Don't know how to handle event '{}' for {}".format(action, self.name))
 
-	def __repr__(self):
+	def __str__(self):
 		return "{} ({})".format(self.name, self.stack)
+
+	def __repr__(self):
+		return self.__str__()
 
 class HandHistory(object):
 	def __init__(self):
