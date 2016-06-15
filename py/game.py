@@ -27,13 +27,13 @@ def determine_blinds(table):
 			idx = (idx + 1) % len(table.players)
 		return (idx, owes)
 
-	if table.game_state['bb_idx'] is None:
+	if table.get_bb_idx() is None:
 		sb_idx, owes = find_active_player(randint(0, len(table.players)-1))
 		bb_idx, also_owes = find_active_player(sb_idx+1)
 		owes.update(also_owes)
 	else:
-		bb_idx, owes = find_active_player(table.game_state['bb_idx'] + 1)
-		sb_idx = table.game_state['bb_idx']
+		bb_idx, owes = find_active_player(table.get_bb_idx() + 1)
+		sb_idx = table.get_bb_idx()
 
 	events = [(p.id, Events.OWE, table.bb) for p in owes]
 	events.append((table.id, Events.SET_GAME_STATE, ("sb_idx", sb_idx)))
@@ -45,15 +45,15 @@ def post_blinds(table):
 	events = []
 	for player in players:
 		if is_playing(player):
-			if player.id in table.owes_bb and player != players[table.game_state['bb_idx']]:
+			if player.id in table.owes_bb and player != players[table.get_bb_idx()]:
 				events.append(player, Events.POST, table.bb)
 			if player.id in table.owes_sb:
 				events.append(player, Events.POST_DEAD, table.sb)
 
-	if is_playing(players[table.game_state['sb_idx']]):
-		events.append((players[table.game_state['sb_idx']].id, Events.POST, table.sb))
+	if is_playing(players[table.get_sb_idx()]):
+		events.append((players[table.get_sb_idx()].id, Events.POST, table.sb))
 
-	events.append((players[table.game_state['bb_idx']].id, Events.POST, table.bb))
+	events.append((players[table.get_bb_idx()].id, Events.POST, table.bb))
 	
 	return events
 
@@ -95,15 +95,17 @@ def get_potsize(table):
 	return 
 
 def get_available_actions(table):
-	to_act = table.get_next_to_act()
+	to_act = table.get_next_player_to_act()
 
 	if not to_act:
 		return None
 
-	if not table.game_state['last_raise_size']:
+	if not table.get_last_raise_size():
 		return (Events.BET, Events.CHECK, Events.FOLD)
-	elif to_act.stack <= (table.game_state['last_raise_size'] - to_act.uncollected_bets):
+	elif to_act.stack <= (table.get_last_raise_size() - to_act.uncollected_bets):
 		return (Events.CALL, Events.FOLD)
+	elif to_act.uncollected_bets == table.get_last_raise_size(): # I can only think of this being the case in a bb/live straddle
+		return (Events.RAISE_TO, Events.CHECK, Events.FOLD)
 	else:
 		return (Events.RAISE_TO, Events.CALL, Events.FOLD)
 
@@ -112,25 +114,31 @@ def get_player_action(table, player):
 
 	print "pot is {}".format(table.current_pot())
 	print "your stack is {}".format(player.stack)
+	print "it is", table.get_last_raise_size(), "to you"
 	print "available_actions are:"
 	print available_actions
 
 	while True:
 		action_in = raw_input("{}> ".format(player.name)).split()
+		print action_in
+		if not action_in:
+			continue
 		try:
+			if action_in[0].upper() == "RAISE":
+				action_in[0] = "RAISE_TO"
 			action = Events[action_in[0].upper()]
 		except KeyError as e:
 			print "{} is not a valid action".format(e)
 			continue
 		if action not in available_actions:
-			print "{} is not a valid action".format(e)
+			print "{} is not a valid action".format(action)
 			continue
 		if len(action_in) == 1:
 			if action not in (Events.CALL, Events.FOLD):
 				print "Must specify an amount."
 				continue
 			else:
-				amt = table.game_state['last_raise_size']
+				amt = table.get_last_raise_size()
 				return (player.id, action, amt)
 		else:
 			try:
@@ -138,7 +146,7 @@ def get_player_action(table, player):
 			except ValueError as e:
 				print "second argument must be a number of chips"
 				continue
-			if not player.can_bet(amt, table.last_raise_size):
+			if not player.can_bet(amt, table.get_last_raise_size()):
 				print "Invalid amount."
 			return (player.id, action, amt)
 
@@ -148,28 +156,32 @@ def betting_round(table, first):
 	n = len(table.players)
 	print "action starts at {}: {}".format(first, table.players[first])
 	table.handle_event(table.id, Events.SET_GAME_STATE, ("next_to_act", first))
-	table.handle_event(table.id, Events.SET_GAME_STATE, ("last_to_raise", None))
+	table.handle_event(table.id, Events.SET_GAME_STATE, ("last_to_raise", first))
 
-	while table.game_state['next_to_act'] != table.game_state['last_to_raise']:
-		to_act = table.get_next_to_act()
-		print "game status:"
-		print table.to_json(indent=4)
-		print "to_act", to_act
+	first_iter = True
+	while True:
+		to_act = table.get_next_player_to_act()
+		print "to_act", to_act, "@", table.get_next_to_act()
 		if to_act:
+			print "game status:"
+			print table.to_json(indent=4)
 			available_actions = get_available_actions(table)
 			# returned action should be a valid action
-			action = get_player_action(table, to_act)
+			player_id, action, amt = get_player_action(table, to_act)
 
-			table.handle_event(*action)
+			table.handle_event(player_id, action, amt)
 
 			if action == Events.CALL:
-				amt = table.game_state['last_raise_size']
+				amt = table.get_last_raise_size()
 			elif action == Events.RAISE_TO or action == Events.BET:
-				 table.handle_event(table.id, Events.SET_GAME_STATE, ("last_raise_size", amt))
+				table.handle_event(table.id, Events.SET_GAME_STATE, ("last_raise_size", amt))
 
-		table.handle_event(table.id, Events.SET_GAME_STATE, ("next_to_act", (table.game_state['next_to_act'] + 1) % n))
-		# close round on first to act if no bet/raises occur
-		table.handle_event(table.id, Events.SET_GAME_STATE, ("last_to_raise", table.game_state['last_to_raise'] or first))
+		if table.get_next_to_act() == table.get_last_to_raise() and not first_iter:
+			break
+
+		first_iter = False
+		table.handle_event(table.id, Events.SET_GAME_STATE, ("next_to_act", (table.get_next_to_act() + 1) % n))
+
 
 def showdown(table):
 	raise Exception("TODO")
@@ -205,41 +217,38 @@ if __name__ == '__main__':
 			table.handle_events(post_blinds(table))
 
 			# deal hole cards
-			first = (table.game_state['bb_idx']+1) % len(table.players)
+			first = (table.get_bb_idx()+1) % len(table.players)
 			table.handle_events(deal_starting_hands(table, first))
 
 			# preflop betting
 			table.handle_event(table.id, Events.SET_GAME_STATE, ("last_raise_size", table.bb))
 			betting_round(table, first)
 
-			for deal_event in deal_events:
-				table.log(post_event)
-
-			if len(active_players) > 1:
+			if len(active_players(table.players)) > 1:
 				# deal flop; flop betting
 				table.board = [deck.deal(), deck.deal(), deck.deal()]
 				table.log("===FLOP=== DEALT: {}".format(table.board))
 				table.last_raise_size = None
-				table.players, player_events = betting_round(table, table.game_state['sb_idx'])
+				table.players, player_events = betting_round(table, table.get_sb_idx())
 				for deal_event in deal_events:
 					table.log(post_event)
 
-			if len(active_players) > 1:
+			if len(active_players(table.players)) > 1:
 				# deal flop; flop betting
 				turn = [deck.deal()]
 				table.board += turn
 				table.log("===TURN=== DEALT: {}".format(turn))
 				table.last_raise_size = None
-				table.players, player_events = betting_round(table, table.game_state['sb_idx'])
+				table.players, player_events = betting_round(table, table.get_sb_idx())
 				for deal_event in deal_events:
 					table.log(post_event)
 
-			if len(active_players) > 1:
+			if len(active_players(table.players)) > 1:
 				# deal flop; flop betting
 				river = [deck.deal()]
 				table.board += river
 				table.log("===RIVER=== DEALT: {}".format(river))
-				table.players, player_events = betting_round(table, table.game_state['sb_idx'])
+				table.players, player_events = betting_round(table, table.get_sb_idx())
 				for deal_event in deal_events:
 					table.log(post_event)
 

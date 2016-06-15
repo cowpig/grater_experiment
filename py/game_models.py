@@ -14,7 +14,7 @@ class Events(Enum):
 		return self.name
 
 # deals with keeping track of players & missing blinds
-class Table(object):
+class Table(object):	
 	def __init__(self, name, sb=1, bb=2, ante=0, max_players=6, players=None):
 		self.id = name
 		self.name = name
@@ -37,13 +37,25 @@ class Table(object):
 		self.game_state = {
 			"sb_idx": None,
 			"bb_idx": None,
-			"last_raise_size": None,
-			"next_to_act": None,
-			"last_to_raise": None,
 			"board": []
 		}
 
 		self.games = [HandHistory()]
+
+	def get_sb_idx(self):
+		return self.game_state['sb_idx']
+
+	def get_bb_idx(self):
+		return self.game_state['bb_idx']
+
+	def get_last_raise_size(self):
+		return self.game_state['last_raise_size']
+
+	def get_next_to_act(self):
+		return self.game_state['next_to_act']
+
+	def get_last_to_raise(self):
+		return self.game_state['last_to_raise']
 
 	def current_pot(self):
 		return sum([player.wagers 
@@ -94,8 +106,8 @@ class Table(object):
 				return player
 		return None
 
-	def get_next_to_act(self):
-		if self.game_state['next_to_act']:
+	def get_next_player_to_act(self):
+		if self.game_state['next_to_act'] is not None:
 			return self.players[self.game_state['next_to_act']]
 		return None
 
@@ -271,6 +283,7 @@ class Player(object):
 
 		self.wagers += amt_adjusted
 		self.stack -= amt_adjusted
+		self.uncollected_bets = amt
 
 		return (self.name, Events.CALL, amt_adjusted)
 
@@ -281,9 +294,9 @@ class Player(object):
 		if amt == self.stack:
 			self.all_in = True
 
+		diff = amt - self.uncollected_bets
 		self.uncollected_bets = amt
 
-		diff = amt - self.uncollected_bets
 		self.wagers += diff
 		self.stack -= diff
 
@@ -291,7 +304,7 @@ class Player(object):
 			self.all_in = True
 
 		self.last_action = Events.RAISE_TO
-		return (self.name, Events.RAISE, (last_amt, amt))
+		return (self.name, Events.RAISE_TO, amt)
 
 	def post(self, amt):
 		if not self.can_bet(amt):
