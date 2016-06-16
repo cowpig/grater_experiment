@@ -5,8 +5,8 @@ import json
 
 class Events(Enum):
 	NONE, DEAL, POST, POST_DEAD, ANTE, BET, RAISE_TO, \
-	CALL, CHECK, FOLD, BUY, SIT_IN, SIT_OUT, DEAL, ADD_CHIPS, \
-	OWE, SET_GAME_STATE, NEW_HAND, NEW_STREET, LOG = range(20)
+	CALL, CHECK, FOLD, BUY, SIT_IN, SIT_OUT, DEAL, WIN, LOSE, ADD_CHIPS, \
+	OWE, SET_GAME_STATE, NEW_HAND, NEW_STREET, LOG = range(22)
 
 	def __str__(self):
 		return self.name
@@ -16,13 +16,17 @@ class Events(Enum):
 
 # deals with keeping track of players & missing blinds
 class Table(object):	
-	def __init__(self, name, sb=1, bb=2, ante=0, max_players=6, players=None):
+	def __init__(self, name, sb=1, bb=2, ante=0, max_players=6, players=None, 
+											min_buyin=None, max_buyin=None):
 		self.id = name
 		self.name = name
 
 		self.sb = sb
 		self.bb = bb
 		self.ante = ante
+
+		self.min_buyin = min_buyin or 50*bb
+		self.max_buyin = max_buyin or 200*bb
 
 		self.players = [None] * max_players
 		if players:
@@ -78,7 +82,8 @@ class Table(object):
 		}
 
 		if self.hand_in_progress():
-			game_state = self.game_state
+			game_state = {k:v for k,v in self.game_state.iteritems()}
+			game_state['board'] = [c.__str__() for c in self.game_state['board']]
 			game_state['pot'] = self.current_pot()
 			out['game_state'] = game_state
 
@@ -97,8 +102,11 @@ class Table(object):
 	def new_hand(self):
 		self.log("===Starting hand {}===".format(len(self.games)))
 		self.games.append(HandHistory())
-		self.board = []
+		self.game_state['board'] = []
+		self.deck = Deck()
 		self.new_street()
+		for player in self.get_active_players():
+			player.new_hand()
 
 	def new_street(self):
 		for player in self.get_active_players():
@@ -150,6 +158,12 @@ class Table(object):
 				player.sit_out()
 			elif event == Events.SIT_OUT:
 				player.sit_in()
+			elif event == Events.LOSE:
+				player.lose(obj)
+			elif event == Events.WIN:
+				player.win(obj)
+			elif event == Events.BUY:
+				player.buy(obj)
 			else:
 				raise Exception("Unknown event {} for {} with {}".format(event, subj, obj))
 		elif subj == self.id:
@@ -166,7 +180,7 @@ class Table(object):
 					raise Exception("Unknown game state parameter")
 				self.game_state[key] = val
 			elif event == Events.DEAL:
-				self.game_state['board'].append([self.deck.deal() for _ in xrange(obj)])
+				self.game_state['board'].extend([self.deck.deal() for _ in xrange(obj)])
 			elif event == Events.NEW_HAND:
 				self.new_hand()
 			elif event == Events.NEW_STREET:
@@ -206,6 +220,21 @@ class Player(object):
 		self.wagers = 0
 		# uncollected_bets represents the total chips put into the pot for one street
 		self.uncollected_bets = 0
+
+	def new_hand(self):
+		self.cards = []
+		self.last_action = Events.NONE
+		if not self.wagers == 0:
+			raise Exception("Money seems to be unaccounted for here...")
+		self.uncollected_bets = 0
+
+	def clone(self):
+		p = Player(self.name, self.stack, self.sitting_out, [c.clone() for c in self.cards])
+		p.all_in = self.all_in
+		p.last_action = self.last_action
+		p.wagers = self.wagers
+		p.uncollected_bets = self.uncollected_bets
+		return p
 
 	def summary_for_json(self):
 		out = {
@@ -305,7 +334,7 @@ class Player(object):
 
 	def post(self, amt):
 		self.check_amt(amt)
-		
+
 		self.wagers += amt
 		self.stack -= amt
 		self.uncollected_bets = amt
@@ -322,7 +351,13 @@ class Player(object):
 		return self.wagers + self.stack + amt <= max_buyin
 
 	def buy(self, amt):
-		self.stack_pending += amt
+		self.stack += amt
+
+	def lose(self, amt):
+		self.wagers -= amt
+
+	def win(self, amt):
+		self.stack += amt
 
 	def take_action(self, action, amt=None):
 		if action == Events.Bet:

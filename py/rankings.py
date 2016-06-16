@@ -1,7 +1,21 @@
-from cards import Card, pluralize
+from cards import Card, pluralize, to_cards
+from itertools import combinations
 
 CARD_ORDER = ["2", "3", "4", "5", "6", "7", 
           "8", "9", "T", "J", "Q", "K", "A"]
+
+def best_hand_from_cards(cards):
+	if len(cards) < 5:
+		raise Exception("Need 5 cards to make a poker hand")
+	return best_hand(combinations(cards, 5))
+
+def best_hand(hands):
+	return sorted(hands, cmp=compare_hands, reverse=True)[0]
+
+def compare_hands(hand1, hand2):
+	h1 = handrank_encoding(hand1)
+	h2 = handrank_encoding(hand2)
+	return compare_encoded_hands(h1, h2)
 
 def compare_ranks(this, that):
 	if type(this) is Card:
@@ -27,6 +41,9 @@ def handrank_encoding(hand):
 		and 9 is Straight Flush). See def handrank_encoding_to_name for a more 
 		precise explanation.
 	'''
+	hand = to_cards(hand)
+	if len(hand) != 5:
+		raise Exception("Need 5 cards to encode")
 
 	# first look for pairs
 	rankset = set([card.rank for card in hand])
@@ -104,3 +121,5 @@ def handrank_encoding_to_name(handrank_encoding):
 			return "Royal Flush"
 		return "Straight Flush, {} to {}".format(Card.ranknames[K5], Card.ranknames[K1])
 
+def hand_to_name(hand):
+	return handrank_encoding_to_name(handrank_encoding(hand))

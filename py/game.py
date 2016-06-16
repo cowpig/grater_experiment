@@ -17,6 +17,9 @@ def is_playing(player):
 def filter_folds(players):
 	return [p for p in players if p.last_action != Events.FOLD]
 
+def filter_nonactors(players):
+	return [p for p in players if p.last_action != Events.FOLD and p.stack]
+
 def determine_blinds(table):
 	def find_active_player(idx):
 		owes = set()
@@ -89,8 +92,7 @@ def log_hands(table, first):
 
 def get_next_to_act(table, first):
 	# players who are all-in or who folded don't take actions
-	players = [p for p in filter_folds(table.get_active_players(first)) if p.stack]
-	players = deque(players)
+	players = deque(filter_nonactors(table.get_active_players(first)))
 
 	if not players:
 		return None
@@ -213,24 +215,78 @@ def get_player_action(table, player):
 def showdown(table, first):
 	events = []
 
-	players = table.get_active_players()
-	showdown_players = [p for p in players if p.last_action != Events.FOLD]
+	# need to clone player objects to safely mutate them for calculations later
+	players = copy.deepcopy(table.get_active_players(first))
+	showdown_players = [p.clone() for p in players if p.last_action != Events.FOLD]
+	pot = table.current_pot()
 
 	if len(showdown_players) == 1:
 		p = showdown_players[0]
-		pot = table.current_pot()
-		events.append((table.id, Events.LOG, "{} wins {} without showdown.".format(p, pot)))
-		events.append((showdown_players[0].id, Events.WIN_POT, pot))
+		events.append((showdown_players[0].id, Events.WIN, pot))
+		for player in players:
+			if player.wagers:
+				events.append((player.id, Events.LOSE, player.wagers))
 
 	else:
 		# iterate over players in order, showing hands
 		# order players by their hand strength
 		# while there's money in the pot, take the strongest hand(s) and give
 		#	those players other players' money
+		def hand(player, board):
+			return rankings.best_hand_from_cards(player.cards + board)
+		board = table.get_board()
 
+		player_hands = [(player.clone(), hand(player, board)) 
+														for player in showdown_players]
+
+		print player_hands
+		for player, hand in player_hands:
+			events.append((table.id, Events.LOG, "{} has {}".format(
+									player.name, rankings.hand_to_name(hand))))
+
+		def compare(player_hand1, player_hand2):
+			return rankings.compare_hands(player_hand1[1], player_hand2[1])
+
+		player_hands.sort(cmp=compare)
+		amt_awarded = 0
+
+		while table.current_pot() - amt_awarded > 0:
+			winners = [player_hands.pop()]
+			while compare(winners[0], player_hands[-1]) == 0:
+				winners.append(player_hands.pop())
+
+			if len(winners) == 1:
+				winner = winners[0][0]
+				sidepot = 0
+				for player in players:
+					if player.wagers:
+						amt_lost = min(player.wagers, winner.wagers)
+						events.append((player.id, Events.LOSE, amt_lost))
+						sidepot += amt_lost
+						player.wagers -= amt_lost
+
+				events.append((showdown_players[0].id, Events.WIN, sidepot))
+				amt_awarded += sidepot
+			else:
+				raise Exception("TODO: split pots")
+
+	return events
 
 def update_buyins(table):
-	raise Exception("TODO")
+	events = []
+	for player in table.get_active_players():
+		if player.stack < table.max_buyin:
+			maximum = table.max_buyin - player.stack
+			print "{}, rebuy? (enter an amount up to {})".format(player.name, maximum)
+			amt = raw_input("{}>".format(player.name))
+			while amt and (not amt.isdigit() and int(amt) > maximum):
+				print "invalid input."
+				amt = raw_input("{}>".format(player.name))
+
+			if amt:
+				events.append((player.id, Events.BUY, int(amt)))
+
+	return events
 
 if __name__ == '__main__':
 	players = [
@@ -254,7 +310,7 @@ if __name__ == '__main__':
 								"Not enough players to deal a new hand.")
 		else:
 			# print "starting hand game state:"
-			# print table.to_json(4)
+			# print table.to_json(44)
 
 			# post blinds
 			table.handle_events(determine_blinds(table))
@@ -273,17 +329,20 @@ if __name__ == '__main__':
 			# sb is first to act for the rest of the rounds
 			first = table.get_sb_idx()
 			
+			def do_betting(table, first):
+				if filter_nonactors(table.get_active_players()) > 1:
+					player = get_next_to_act(table, first)
+					while player is not None:
+						table.handle_event(*get_player_action(table, player))
+						player = get_next_to_act(table, first)
+
 			# FLOP
 			if len(filter_folds(table.get_active_players())) > 1:
 				table.handle_event(table.id, Events.NEW_STREET, None)
 				table.handle_event(table.id, Events.DEAL, 3)
 				msg = "===FLOP=== DEALT: {}".format(table.get_board())
 				table.handle_event(table.id, Events.LOG, msg)
-
-				player = get_next_to_act(table, first)
-				while player is not None:
-					table.handle_event(*get_player_action(table, player))
-					player = get_next_to_act(table, first)
+				do_betting(table, first)
 
 			# TURN
 			if len(filter_folds(table.get_active_players())) > 1:
@@ -292,11 +351,8 @@ if __name__ == '__main__':
 				msg = "===TURN=== DEALT: {} {}".format(table.get_board()[:3], 
 															table.get_board()[3:])
 				table.handle_event(table.id, Events.LOG, msg)
+				do_betting(table, first)
 
-				player = get_next_to_act(table, first)
-				while player is not None:
-					table.handle_event(*get_player_action(table, player))
-					player = get_next_to_act(table, first)
 
 			# RIVER
 			if len(filter_folds(table.get_active_players())) > 1:
@@ -305,14 +361,10 @@ if __name__ == '__main__':
 				msg = "===RIVER=== DEALT: {} {}".format(table.get_board()[:4], 
 															table.get_board()[4:])
 				table.handle_event(table.id, Events.LOG, msg)
+				do_betting(table, first)
 
-				player = get_next_to_act(table, first)
-				while player is not None:
-					table.handle_event(*get_player_action(table, player))
-					player = get_next_to_act(table, first)
-
-			# showdown, stack updates:
-			showdown(table)
-
-		table.players = update_buyins(table)
+			# showdown
+			table.handle_events(showdown(table, first))
+		# rebuys
+		table.handle_events(update_buyins(table))
 

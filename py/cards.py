@@ -1,7 +1,14 @@
 import random
 
-def to_cards(handstr):
-	return [Card(s) for s in handstr.split(" ")]
+def to_cards(hand):
+	if isinstance(hand, str):
+		return [Card(s) for s in hand.split(" ")]
+	elif isinstance(hand[0], str):
+		return [Card(s) for s in hand]
+	elif isinstance(hand[0], Card):
+		return hand
+
+	raise Exception("Don't how to convert {} to a list of cards".format(hand))
 
 def pluralize(card_or_rank):
 	if type(card_or_rank) is str:
@@ -53,6 +60,8 @@ class Card(object):
 		self.rank = rank
 		self.suit = suit
 
+	def clone(self):
+		return Card(self.__str__())
 
 	def __str__(self):
 		return "{}{}".format(self.rank, self.suit)
