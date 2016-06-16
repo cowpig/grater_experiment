@@ -14,8 +14,8 @@ def is_playing(player):
 	else:
 		return not player.sitting_out
 
-def active_players(players):
-	return [p for p in players if p and not p.sitting_out]
+def filter_folds(players):
+	return [p for p in players if p.last_action != Events.FOLD]
 
 def determine_blinds(table):
 	def find_active_player(idx):
@@ -43,12 +43,11 @@ def determine_blinds(table):
 
 def post_blinds(table):
 	events = []
-	for player in players:
-		if is_playing(player):
-			if player.id in table.owes_bb and player != players[table.get_bb_idx()]:
-				events.append(player, Events.POST, table.bb)
-			if player.id in table.owes_sb:
-				events.append(player, Events.POST_DEAD, table.sb)
+	for player in table.get_active_players():
+		if player.id in table.owes_bb and player != players[table.get_bb_idx()]:
+			events.append(player, Events.POST, table.bb)
+		if player.id in table.owes_sb:
+			events.append(player, Events.POST_DEAD, table.sb)
 
 	if is_playing(players[table.get_sb_idx()]):
 		events.append((players[table.get_sb_idx()].id, Events.POST, table.sb))
@@ -57,7 +56,7 @@ def post_blinds(table):
 	
 	return events
 
-def prep_new_hand(table):
+def sit_out_inactives(table):
 	events = []
 
 	# set correct states
@@ -82,44 +81,104 @@ def deal_starting_hands(table, first):
 	return events
 
 def log_hands(table, first):
+	events = []
 	for player in rotate_iter(table.players, first):
-		table.log("{} ({}) dealt: {}".format(player.name, player.stack, player.cards))
+		msg = "{} ({}) dealt: {}".format(player.name, player.stack, player.cards)
+		events.append(table.id, Events.LOG, msg)
+	return events
 
-def ordered_active_players(table, first):
-	return deque([p for p in rotate_iter(table.players, first) if is_playing(p)])
+def get_next_to_act(table, first):
+	# players who are all-in or who folded don't take actions
+	players = [p for p in filter_folds(table.get_active_players(first)) if p.stack]
+	players = deque(players)
 
-def get_potsize(table):
-	print "calculating sum of:"
-	print [(player.name, player.wagers) 
-			for player in table.players if is_playing(player)]
-	return 
-
-def get_available_actions(table):
-	to_act = table.get_next_player_to_act()
-
-	if not to_act:
+	if not players:
 		return None
 
-	if not table.get_last_raise_size():
-		return (Events.BET, Events.CHECK, Events.FOLD)
-	elif to_act.stack <= (table.get_last_raise_size() - to_act.uncollected_bets):
-		return (Events.CALL, Events.FOLD)
-	elif to_act.uncollected_bets == table.get_last_raise_size(): # I can only think of this being the case in a bb/live straddle
-		return (Events.RAISE_TO, Events.CHECK, Events.FOLD)
+	last_to_raise = None
+	stop_at = None
+
+	while True:
+		player = players.popleft()
+		print "checking", player
+
+		if player.last_action in (Events.NONE, Events.POST):
+			return player
+
+		if last_to_raise is not None:
+			if player.uncollected_bets < last_to_raise.uncollected_bets:
+				return player
+			if last_to_raise == player:
+				return None
+		elif stop_at == player:
+			return None
+
+		if player.last_action in (Events.RAISE_TO, Events.BET):
+			last_to_raise = player
+
+		stop_at = stop_at or player
+		players.append(player)
+
+def get_last_raise_size(table):
+	return max([p.uncollected_bets for p in table.get_active_players()])
+
+def get_last_raise_diff(table):
+	raises = set([p.uncollected_bets for p in table.get_active_players()])
+	if raises:
+		raise_size = max(raises)
+		raises.remove(raise_size)
+		if raises:
+			before_that = max(raises)
+			return raise_size - before_that
+		else:
+			return raise_size
+
+	return 0
+
+def get_available_actions(table, player):
+	actions = [Events.FOLD]
+	last_raise_size = get_last_raise_size(table)
+
+	if last_raise_size > player.uncollected_bets:
+		actions.append(Events.CALL)
 	else:
-		return (Events.RAISE_TO, Events.CALL, Events.FOLD)
+		actions.append(Events.CHECK)
+
+	if player.stack + player.uncollected_bets > last_raise_size:
+		if last_raise_size == 0:
+			actions.append(Events.BET)
+		else:
+			actions.append(Events.RAISE_TO)
+
+	return actions
+
+def is_legal_betsize(table, player, amt):
+	if amt == player.stack:
+		return True
+	elif amt > player.stack:
+		return False
+
+	if amt - get_last_raise_size(table) >= get_last_raise_diff(table):
+		return True
+
+	return False
+
 
 def get_player_action(table, player):
-	available_actions = get_available_actions(table)
+	available_actions = get_available_actions(table, player)
 
+	print "BOARD:", table.get_board()
+	print "YOUR HAND:", player.cards
 	print "pot is {}".format(table.current_pot())
-	print "your stack is {}".format(player.stack)
-	print "it is", table.get_last_raise_size(), "to you"
+	stack_msg = "your stack is {}".format(player.stack)
+	if player.uncollected_bets:
+		stack_msg += " (+ {} in front)".format(player.uncollected_bets)
+	print "it is", get_last_raise_size(table), "to you"
 	print "available_actions are:"
 	print available_actions
 
 	while True:
-		action_in = raw_input("{}> ".format(player.name)).split()
+		action_in = raw_input("\t{}> ".format(player.name)).split()
 		print action_in
 		if not action_in:
 			continue
@@ -134,11 +193,11 @@ def get_player_action(table, player):
 			print "{} is not a valid action".format(action)
 			continue
 		if len(action_in) == 1:
-			if action not in (Events.CALL, Events.FOLD):
+			if action not in (Events.CALL, Events.FOLD, Events.CHECK):
 				print "Must specify an amount."
 				continue
 			else:
-				amt = table.get_last_raise_size()
+				amt = get_last_raise_size(table)
 				return (player.id, action, amt)
 		else:
 			try:
@@ -146,45 +205,29 @@ def get_player_action(table, player):
 			except ValueError as e:
 				print "second argument must be a number of chips"
 				continue
-			if not player.can_bet(amt, table.get_last_raise_size()):
-				print "Invalid amount."
+			if not is_legal_betsize(table, player, amt):
+				print "Invalid bet/raise size."
+				continue
 			return (player.id, action, amt)
 
-def betting_round(table, first):
-	# TODO: in keeping with the rest of the code, I'd like to pull all table.handle_event
-	# 	calls out to the main loop
-	n = len(table.players)
-	print "action starts at {}: {}".format(first, table.players[first])
-	table.handle_event(table.id, Events.SET_GAME_STATE, ("next_to_act", first))
-	table.handle_event(table.id, Events.SET_GAME_STATE, ("last_to_raise", first))
+def showdown(table, first):
+	events = []
 
-	first_iter = True
-	while True:
-		to_act = table.get_next_player_to_act()
-		print "to_act", to_act, "@", table.get_next_to_act()
-		if to_act:
-			print "game status:"
-			print table.to_json(indent=4)
-			available_actions = get_available_actions(table)
-			# returned action should be a valid action
-			player_id, action, amt = get_player_action(table, to_act)
+	players = table.get_active_players()
+	showdown_players = [p for p in players if p.last_action != Events.FOLD]
 
-			table.handle_event(player_id, action, amt)
+	if len(showdown_players) == 1:
+		p = showdown_players[0]
+		pot = table.current_pot()
+		events.append((table.id, Events.LOG, "{} wins {} without showdown.".format(p, pot)))
+		events.append((showdown_players[0].id, Events.WIN_POT, pot))
 
-			if action == Events.CALL:
-				amt = table.get_last_raise_size()
-			elif action == Events.RAISE_TO or action == Events.BET:
-				table.handle_event(table.id, Events.SET_GAME_STATE, ("last_raise_size", amt))
+	else:
+		# iterate over players in order, showing hands
+		# order players by their hand strength
+		# while there's money in the pot, take the strongest hand(s) and give
+		#	those players other players' money
 
-		if table.get_next_to_act() == table.get_last_to_raise() and not first_iter:
-			break
-
-		first_iter = False
-		table.handle_event(table.id, Events.SET_GAME_STATE, ("next_to_act", (table.get_next_to_act() + 1) % n))
-
-
-def showdown(table):
-	raise Exception("TODO")
 
 def update_buyins(table):
 	raise Exception("TODO")
@@ -203,11 +246,12 @@ if __name__ == '__main__':
 	while True:
 		deck = Deck(shuffled=True)
 
-		table.handle_events(prep_new_hand(table))
+		table.handle_events(sit_out_inactives(table))
 		table.handle_event(table.id, Events.NEW_HAND, None)
 
-		if len(active_players(table.players)) < 2:
-			table.log("Not enough players to deal a new hand.")
+		if len(table.get_active_players()) < 2:
+			table.handle_event(table.id, Events.LOG, 
+								"Not enough players to deal a new hand.")
 		else:
 			# print "starting hand game state:"
 			# print table.to_json(4)
@@ -221,39 +265,54 @@ if __name__ == '__main__':
 			table.handle_events(deal_starting_hands(table, first))
 
 			# preflop betting
-			table.handle_event(table.id, Events.SET_GAME_STATE, ("last_raise_size", table.bb))
-			betting_round(table, first)
+			player = get_next_to_act(table, first)
+			while player is not None:
+				table.handle_event(*get_player_action(table, player))
+				player = get_next_to_act(table, first)
 
-			if len(active_players(table.players)) > 1:
-				# deal flop; flop betting
-				table.board = [deck.deal(), deck.deal(), deck.deal()]
-				table.log("===FLOP=== DEALT: {}".format(table.board))
-				table.last_raise_size = None
-				table.players, player_events = betting_round(table, table.get_sb_idx())
-				for deal_event in deal_events:
-					table.log(post_event)
+			# sb is first to act for the rest of the rounds
+			first = table.get_sb_idx()
+			
+			# FLOP
+			if len(filter_folds(table.get_active_players())) > 1:
+				table.handle_event(table.id, Events.NEW_STREET, None)
+				table.handle_event(table.id, Events.DEAL, 3)
+				msg = "===FLOP=== DEALT: {}".format(table.get_board())
+				table.handle_event(table.id, Events.LOG, msg)
 
-			if len(active_players(table.players)) > 1:
-				# deal flop; flop betting
-				turn = [deck.deal()]
-				table.board += turn
-				table.log("===TURN=== DEALT: {}".format(turn))
-				table.last_raise_size = None
-				table.players, player_events = betting_round(table, table.get_sb_idx())
-				for deal_event in deal_events:
-					table.log(post_event)
+				player = get_next_to_act(table, first)
+				while player is not None:
+					table.handle_event(*get_player_action(table, player))
+					player = get_next_to_act(table, first)
 
-			if len(active_players(table.players)) > 1:
-				# deal flop; flop betting
-				river = [deck.deal()]
-				table.board += river
-				table.log("===RIVER=== DEALT: {}".format(river))
-				table.players, player_events = betting_round(table, table.get_sb_idx())
-				for deal_event in deal_events:
-					table.log(post_event)
+			# TURN
+			if len(filter_folds(table.get_active_players())) > 1:
+				table.handle_event(table.id, Events.NEW_STREET, None)
+				table.handle_event(table.id, Events.DEAL, 1)
+				msg = "===TURN=== DEALT: {} {}".format(table.get_board()[:3], 
+															table.get_board()[3:])
+				table.handle_event(table.id, Events.LOG, msg)
+
+				player = get_next_to_act(table, first)
+				while player is not None:
+					table.handle_event(*get_player_action(table, player))
+					player = get_next_to_act(table, first)
+
+			# RIVER
+			if len(filter_folds(table.get_active_players())) > 1:
+				table.handle_event(table.id, Events.NEW_STREET, None)
+				table.handle_event(table.id, Events.DEAL, 1)
+				msg = "===RIVER=== DEALT: {} {}".format(table.get_board()[:4], 
+															table.get_board()[4:])
+				table.handle_event(table.id, Events.LOG, msg)
+
+				player = get_next_to_act(table, first)
+				while player is not None:
+					table.handle_event(*get_player_action(table, player))
+					player = get_next_to_act(table, first)
 
 			# showdown, stack updates:
-			table.players = showdown(table)
+			showdown(table)
 
 		table.players = update_buyins(table)
 

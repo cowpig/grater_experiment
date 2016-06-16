@@ -1,11 +1,12 @@
 from enum import Enum
 from cards import Deck, Card
+from utils import rotate_iter
 import json
 
 class Events(Enum):
 	NONE, DEAL, POST, POST_DEAD, ANTE, BET, RAISE_TO, \
 	CALL, CHECK, FOLD, BUY, SIT_IN, SIT_OUT, DEAL, ADD_CHIPS, \
-	OWE, SET_GAME_STATE, NEW_HAND = range(18)
+	OWE, SET_GAME_STATE, NEW_HAND, NEW_STREET, LOG = range(20)
 
 	def __str__(self):
 		return self.name
@@ -42,24 +43,25 @@ class Table(object):
 
 		self.games = [HandHistory()]
 
-	def get_sb_idx(self):
-		return self.game_state['sb_idx']
-
 	def get_bb_idx(self):
 		return self.game_state['bb_idx']
 
-	def get_last_raise_size(self):
-		return self.game_state['last_raise_size']
+	def get_sb_idx(self):
+		return self.game_state['sb_idx']
 
-	def get_next_to_act(self):
-		return self.game_state['next_to_act']
+	def get_board(self):
+		return self.game_state['board']
 
-	def get_last_to_raise(self):
-		return self.game_state['last_to_raise']
+	def get_active_players(self, rotate=0):
+		return [p for p in rotate_iter(self.players, rotate) 
+						if p is not None and not p.sitting_out]
+
+	def get_players_still_in(self, rotate=0):
+		return [p for p in self.get_active_players(rotate)
+						if p.last_action != Events.FOLD]
 
 	def current_pot(self):
-		return sum([player.wagers 
-			for player in self.players if player and not player.sitting_out])
+		return sum([player.wagers for player in self.get_active_players()])
 
 	def hand_in_progress(self):
 		# TODO: there might be an edge case where this becomes incorrect?
@@ -96,6 +98,12 @@ class Table(object):
 		self.log("===Starting hand {}===".format(len(self.games)))
 		self.games.append(HandHistory())
 		self.board = []
+		self.new_street()
+
+	def new_street(self):
+		for player in self.get_active_players():
+			player.last_action = Events.NONE
+			player.uncollected_bets = 0
 
 	def is_player(self, x):
 		return x in [p.id for p in self.players if p]
@@ -106,10 +114,8 @@ class Table(object):
 				return player
 		return None
 
-	def get_next_player_to_act(self):
-		if self.game_state['next_to_act'] is not None:
-			return self.players[self.game_state['next_to_act']]
-		return None
+	def deal(self, n_cards):
+		self.game_state.board.extend([self.deck.deal() for _ in xrange(n_cards)])
 
 	def handle_event(self, subj, event, obj):
 		if isinstance(subj, Player):
@@ -137,7 +143,7 @@ class Table(object):
 			elif event == Events.FOLD:
 				player.fold()
 			elif event == Events.CHECK:
-				pass
+				player.check()
 			elif event == Events.DEAL:
 				player.deal([self.deck.deal() for _ in xrange(obj)])
 			elif event == Events.SIT_IN:
@@ -163,6 +169,10 @@ class Table(object):
 				self.game_state['board'].append([self.deck.deal() for _ in xrange(obj)])
 			elif event == Events.NEW_HAND:
 				self.new_hand()
+			elif event == Events.NEW_STREET:
+				self.new_street()
+			elif event == Events.LOG:
+				pass
 			else:
 				raise Exception("Unknown event {} for {} with {}".format(event, subj, obj))
 
@@ -237,35 +247,25 @@ class Player(object):
 
 	def deal(self, cards):
 		self.cards.extend(cards)
-		return (self.name, Events.DEAL, cards)
 
-	def can_bet(self, amt, last_raise_size=0):
+	def check_amt(self, amt):
 		if amt > self.stack:
-			return False
-		if amt < (last_raise_size*2) and amt != self.stack:
-			False
-		return True
+			raise Exception("trying to bet more than stack")
 
 	def ante(self, amt):
-		if not self.can_bet(amt, last_amt):
-			return False
-
+		self.check_amt(amt)
 		self.wagers += amt
 		self.stack -= amt
-		return (self.name, "ANTE", amt)
 
 	def post_dead(self, amt):
-		if not self.can_bet(amt, last_amt):
-			return False
+		self.check_amt(amt)
 
 		self.wagers += amt
 		self.stack -= amt
-		return (self.name, Events.POST_DEAD, amt)
 
 	def bet(self, amt):
-		if not self.can_bet(amt):
-			return False
-			
+		self.check_amt(amt)
+
 		if amt == self.stack:
 			self.all_in = True
 
@@ -273,10 +273,12 @@ class Player(object):
 		self.uncollected_bets = amt
 		self.wagers += amt
 		self.stack -= amt
-		return (self.name, Events.BET, amt)
+
+		self.last_action = Events.BET
 
 	def call(self, amt):
 		amt_adjusted = amt - self.uncollected_bets
+
 		if amt_adjusted >= self.stack:
 			self.all_in = True
 			amt_adjusted = self.stack
@@ -285,14 +287,10 @@ class Player(object):
 		self.stack -= amt_adjusted
 		self.uncollected_bets = amt
 
-		return (self.name, Events.CALL, amt_adjusted)
+		self.last_action = Events.CALL
 
 	def raise_to(self, amt, last_raise_size=0):
-		if not self.can_bet(amt, last_raise_size):
-			return False
-				
-		if amt == self.stack:
-			self.all_in = True
+		self.check_amt(amt)
 
 		diff = amt - self.uncollected_bets
 		self.uncollected_bets = amt
@@ -304,29 +302,27 @@ class Player(object):
 			self.all_in = True
 
 		self.last_action = Events.RAISE_TO
-		return (self.name, Events.RAISE_TO, amt)
 
 	def post(self, amt):
-		if not self.can_bet(amt):
-			return False
-
+		self.check_amt(amt)
+		
 		self.wagers += amt
 		self.stack -= amt
 		self.uncollected_bets = amt
+
 		self.last_action = Events.POST
 		
-		return (self.name, Events.POST, amt)
-
 	def fold(self):
 		self.last_action = Events.FOLD
-		return (self.name, Events.FOLD, None)
+
+	def check(self):
+		self.last_action = Events.CHECK
 
 	def can_buy(self, amt, max_buyin):
 		return self.wagers + self.stack + amt <= max_buyin
 
 	def buy(self, amt):
 		self.stack_pending += amt
-		return (self.name, Events.BUY, amt)
 
 	def take_action(self, action, amt=None):
 		if action == Events.Bet:
